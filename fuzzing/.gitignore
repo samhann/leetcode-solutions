@@ -1,0 +1,21 @@
+# Compiled binaries (regenerate with: make build)
+fuzz_longest_palindrome
+fuzz_remove_k_digits
+longest_palindrome
+remove_k_digits
+
+# libFuzzer corpus (regenerate with: make fuzz)
+corpus_palindrome/
+corpus_remove_k/
+
+# libFuzzer crash/leak artifacts
+crash-*
+leak-*
+
+# Generated test files (regenerate with: make generate-tests)
+test_longest_palindromic_substring.py
+test_remove_k_digits.py
+test_suite_*.json
+
+# Python cache
+__pycache__/

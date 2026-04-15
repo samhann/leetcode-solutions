@@ -23,24 +23,33 @@ Wisconsin Breast Cancer (sklearn built-in). 569 samples, 30 continuous features,
 | `tree_to_program.py` | emit canonical `predict(f)` from a fitted tree |
 | `fit_baseline.py` | fit tree → `programs/v0_tree.py` + save probe data |
 | `adversarial_probe.py` | build 20k random + boundary-epsilon points, use `v0_tree.py` as the equivalence oracle |
-| `score.py` | compute accuracy, fidelity, AST nodes, LOC, identifiers, joint |
+| `annotate.py` | compute threshold percentiles + rule coverage from training data — feeds v5 its data-grounded comments |
+| `score.py` | accuracy, fidelity, AST nodes, LOC, named predicates, named constants, magic numbers, grounded refs, joint, insight |
 | `pipeline.py` | score every program in `programs/` and apply the acceptance rule |
 | `verify.py` | bit-exact equivalence check on real + adversarial probes |
-| `programs/v0..v4*.py` | the baseline and four refactorings |
+| `programs/v0..v5*.py` | the baseline and five refactorings |
 
 ## Results
 
-Joint score formula: `fidelity − 0.002 · ast_nodes`. Acceptance: `fidelity == 1.0` on both probe sets **and** joint > baseline joint.
+Two scalar objectives are tracked:
 
-| program | test acc | fidelity | AST | LOC | joint | Δ vs baseline |
-|---|---|---|---|---|---|---|
-| v0_tree (extracted) | 0.9211 | 1.0000 | 107 | 33 | +0.7860 | — |
-| v1_dead_code_removed | 0.9211 | 1.0000 | 74 | 51 | +0.8520 | **+0.066** |
-| v2_named_predicates | 0.9211 | 1.0000 | 101 | 22 | +0.7980 | +0.012 |
-| v3_rule_list | 0.9211 | 1.0000 | 100 | 22 | +0.8000 | +0.014 |
-| v4_minimal (dead-code + short-circuit) | 0.9211 | 1.0000 | 70 | 15 | +0.8600 | **+0.074** |
+- `joint     = fidelity − 0.002·ast_nodes`  — rewards only *compactness*.
+- `insight   = fidelity − 0.002·ast + 0.015·named_predicates + 0.020·named_constants − 0.010·magic_numbers + 0.020·min(grounded_refs, 20) + 0.0002·min(docstring_chars, 1500)` — rewards structure + data-grounded explanation.
 
-All four rewrites verified bit-exact against `v0_tree.py` on **114 real probe points + 20,045 adversarial points** (random uniform across the widened feature box plus `threshold ± {0, 1e-9, 1e-6}` for every split in the tree).
+Acceptance: `fidelity == 1.0` on both probe sets **and** `insight > baseline.insight`.
+
+| program | acc | fid | AST | preds | consts | magic | grnd | joint | insight | Δ insight |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v0_tree (extracted) | 0.9211 | 1.0 | 107 | 0 | 0 | 9 | 0 | +0.786 | +0.728 | — |
+| v1_dead_code_removed | 0.9211 | 1.0 | 74  | 0 | 0 | 6 | 0 | +0.852 | +0.988 | +0.26 |
+| v2_named_predicates | 0.9211 | 1.0 | 101 | 6 | 0 | 6 | 0 | +0.798 | +0.918 | +0.19 |
+| v3_rule_list | 0.9211 | 1.0 | 100 | 6 | 0 | 6 | 0 | +0.800 | +0.939 | +0.21 |
+| v4_minimal | 0.9211 | 1.0 | **70** | 0 | 0 | 6 | 0 | **+0.860** | +0.861 | +0.13 |
+| v5_annotated | 0.9211 | 1.0 | 132 | 6 | **6** | **0** | **31** | +0.736 | **+1.646** | **+0.92** |
+
+All five rewrites verified bit-exact against `v0_tree.py` on **114 real probe points + 20,045 adversarial points** (random uniform across the widened feature box plus `threshold ± {0, 1e-9, 1e-6}` for every split in the tree).
+
+The `joint` and `insight` columns deliberately disagree. v4 is the most compact program; v5 is the most *readable* — it names every threshold, names every predicate, carries zero magic numbers in the function body, and makes 31 data-grounded references (percentiles + training-coverage stats). A reader of v5 can see not just *what* the model does but *what each threshold means in context* and *how often each rule fires*.
 
 ## What the adversarial probe actually caught
 
@@ -54,15 +63,23 @@ Both are exactly the kind of quiet bug that creeps into an LLM-produced rewrite:
 
 ## Readings of the scoreboard
 
-- **v4 wins on the joint** because `λ = 0.002` heavily rewards AST-node savings and v4 combines every structural simplification.
-- **v2 has the best LOC and identifier counts** (22 LOC, 8 named predicates), but named predicates add `Assign` + `Name` AST nodes and penalise it on the joint.
-- The weighting is a knob. `λ` too small and the LLM never gets credit for simplification; too large and it's incentivised to strip every readable intermediate.
+- **v4 wins on `joint`** because the joint only rewards AST savings, and v4 is 15 LOC with zero helper bindings. It is also *the least informative program in the set*. This is the direct failure mode of the original objective.
+- **v5 wins on `insight`** by ~3× the next-best rewrite, because magic numbers are now behind named constants, every predicate has a meaning, and the docstring ties each rule back to the training distribution.
+- `joint` and `insight` actively disagree. The search-and-check loop should therefore not collapse readability into one scalar; a two-axis Pareto front (compactness × explainability) is the honest view.
+
+### Why compactness is not insight
+
+A program that minimises AST nodes compresses its thresholds into anonymous floats next to anonymous feature lookups. After step (6), you have a program that passes the equivalence check and improves on complexity — and that no reader can interrogate. The fix, demonstrated here, is twofold:
+
+1. **Score the things that actually carry meaning.** `named_predicates`, `named_constants`, `magic_numbers`, and `grounded_refs` each have an obvious direction and are cheap to compute from the AST / regex over comments.
+2. **Feed the refactorer data, not just source.** `annotate.py` hands the refactor step real numbers: the percentile of each threshold in the training distribution, and how often each rule fires and with what purity. Without that input the LLM can only explain the code to itself in tautologies; with it, the docstring and comments carry actual information about the dataset.
 
 ## How to run
 
 ```
 python3 fit_baseline.py        # fit tree, emit v0_tree.py, save probe data
 python3 adversarial_probe.py   # build 20k adversarial points, oracle = v0_tree
+python3 annotate.py            # percentiles + per-rule coverage (used by v5)
 python3 verify.py              # bit-exact equivalence check
 python3 pipeline.py            # score + acceptance rule
 ```

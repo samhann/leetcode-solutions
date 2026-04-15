@@ -56,15 +56,20 @@ def main(argv):
     base = next((s for s in scores if s.name == "v0_tree"), None)
     if base is not None:
         print()
-        print("acceptance (fidelity==1.0 AND joint > baseline joint):")
+        print("acceptance rule: fidelity==1.0 AND insight > baseline insight")
+        print("(insight rewards named predicates/constants and docstrings, "
+              "penalises magic numbers)")
+        print()
         for s in scores:
             if s.name == "v0_tree":
-                print(f"  {s.name:<20} BASELINE")
+                print(f"  {s.name:<20} BASELINE  joint={s.joint:+.4f} insight={s.insight:+.4f}")
                 continue
-            ok = s.fidelity_probe >= 1.0 and s.joint > base.joint
-            delta = s.joint - base.joint
+            ok = s.fidelity_probe >= 1.0 and s.insight > base.insight
+            d_joint = s.joint - base.joint
+            d_ins = s.insight - base.insight
             print(f"  {s.name:<20} {'ACCEPT' if ok else 'REJECT'}  "
-                  f"fid={s.fidelity_probe:.4f} delta_joint={delta:+.4f}")
+                  f"fid={s.fidelity_probe:.4f}  "
+                  f"Δjoint={d_joint:+.4f}  Δinsight={d_ins:+.4f}")
 
     out = HERE / "runs" / "scores.json"
     out.write_text(json.dumps([score_to_dict(s) for s in scores], indent=2))
